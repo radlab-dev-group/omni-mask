@@ -1,6 +1,45 @@
-## Omni‑Mask – Co znajduje się w repozytorium
+## 🇵🇱 Omni‑Mask – Co znajduje się w repozytorium
 
-### Struktura pakietu
+### Instalacja
+
+1. **Sklonuj repozytorium**
+
+```shell script
+git clone https://github.com/your-org/omni-mask.git
+cd omni-mask
+```
+
+2. **Utwórz i aktywuj wirtualne środowisko (zalecane)**
+
+```shell script
+python -m venv .venv
+# Linux / macOS
+source .venv/bin/activate
+# Windows
+.venv\Scripts\activate
+```
+
+3. **Zainstaluj zależności**
+
+```shell script
+pip install -r requirements.txt
+```
+
+> **Uwaga:** `tkinter` jest częścią standardowej biblioteki Pythona, więc nie wymaga dodatkowej instalacji.
+
+4. **(Opcjonalnie) Zainstaluj pakiet w trybie “editable”** – przydatne, gdy planujesz rozwijać projekt
+
+```shell script
+pip install -e .
+```
+
+5. **Uruchom aplikację**
+
+```shell script
+python -m omni_mask.gui.app
+```
+
+### Struktura
 
 ```
 omni_mask/

@@ -1,4 +1,43 @@
-## Omni‑Mask – What the repository actually contains
+## 🇬🇧 Omni‑Mask – What the repository actually contains
+
+### Installation
+
+1. **Clone the repository**
+
+```shell script
+git clone https://github.com/your-org/omni-mask.git
+cd omni-mask
+```
+
+2. **Create and activate a virtual environment (recommended)**
+
+```shell script
+python -m venv .venv
+# Linux / macOS
+source .venv/bin/activate
+# Windows
+.venv\Scripts\activate
+```
+
+3. **Install the required packages**
+
+```shell script
+pip install -r requirements.txt
+```
+
+*`tkinter` comes with the standard Python distribution, so no extra step is needed.*
+
+4. **(Optional) Install the project in editable mode** – useful for development
+
+```shell script
+pip install -e .
+```
+
+5. **Run the GUI**
+
+```shell script
+python -m omni_mask.gui.app
+```
 
 ### Package layout
 
