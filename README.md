@@ -5,7 +5,7 @@
 1. **Clone the repository**
 
 ```shell script
-git clone https://github.com/your-org/omni-mask.git
+git clone https://github.com/radlab-dev-group/omni-mask.git
 cd omni-mask
 ```
 
