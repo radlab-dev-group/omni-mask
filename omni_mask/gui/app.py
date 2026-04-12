@@ -467,3 +467,8 @@ class App(tk.Tk):
             )
         except Exception as e:
             self.log(f"[BŁĄD] Zapis klucza nie powiódł się: {str(e)}")
+
+
+if __name__ == "__main__":
+    app = App()
+    app.mainloop()
