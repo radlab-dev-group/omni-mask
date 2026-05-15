@@ -9,7 +9,14 @@ class BaseLoader(ABC):
         pass
 
     @abstractmethod
-    def anonymize(self, filepath: str, outpath: str, core: Any, pii_enabled: Set = None, enabled_fastmask: Set = None) -> None:
+    def anonymize(
+        self,
+        filepath: str,
+        outpath: str,
+        core: Any,
+        pii_enabled: Set = None,
+        enabled_fastmask: Set = None,
+    ) -> None:
         """Przeprowadza anonimizację pliku."""
         pass
 

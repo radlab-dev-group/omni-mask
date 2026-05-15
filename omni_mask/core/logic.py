@@ -23,6 +23,7 @@ _anon_predictor_class = None
 _pii_import_error = None
 try:
     from pii_classification.inference.inference import AnonPredictor
+
     _anon_predictor_class = AnonPredictor
 except Exception as exc:
     _pii_import_error = str(exc)
@@ -38,8 +39,8 @@ PII_TYPE_LABELS = {
     "ORGANIZATION": "Organizacja",
     "PRODUCT": "Produkt",
     "EVENT": "Wydarzenie",
-    "CONTACT/NUM": "Kontakt / Numer",
-    "OTHER": "Inne",
+    # "CONTACT/NUM": "Kontakt / Numer",
+    # "OTHER": "Inne",
 }
 
 # Labels for the FastMasker checkbox section
@@ -104,29 +105,47 @@ class AnonymizerCore:
         if not pii_enabled_labels:
             return text, {}
 
-        target_labels = [l for l in PII_TYPE_LABELS.keys() if l in pii_enabled_labels]
-        result = predictor.predict_and_anonymize(text=text, labels=target_labels)
-        return result["text"], result["mappings"]
+        target_labels = [
+            l for l in PII_TYPE_LABELS.keys() if l in pii_enabled_labels
+        ]
+        try:
+            result = predictor.predict_and_anonymize(text=text, labels=target_labels)
+        except Exception as exc:
+            logger.warning("PII prediction failed: %s", exc)
+            return text, {}
+        mappings = result.get("mappings", {})
+        if mappings and len(mappings) < 5 and len(text) > 200:
+            logger.warning(
+                "PII returned only %d mappings for text of length %d — "
+                "possible PyTorch 2.12 issue",
+                len(mappings),
+                len(text),
+            )
+        return result["text"], mappings
 
     def accumulate_pii_mappings(self, mappings: dict):
         for tag, orig in mappings.items():
             tag_type = tag.split("_")[0]
-            self._accumulated_records.append({
-                "Oryginalna wartość": orig,
-                "Typ danych": tag_type,
-                "Wygenerowany pseudonim": "{" + tag + "}",
-                "Kontekst": "",
-            })
+            self._accumulated_records.append(
+                {
+                    "Oryginalna wartość": orig,
+                    "Typ danych": tag_type,
+                    "Wygenerowany pseudonim": "{" + tag + "}",
+                    "Kontekst": "",
+                }
+            )
 
     def accumulate_fastmask_mappings(self, mappings: dict):
         for pseudo, orig in mappings.items():
             tag_type = pseudo.split("_")[0]
-            self._accumulated_records.append({
-                "Oryginalna wartość": orig,
-                "Typ danych": tag_type,
-                "Wygenerowany pseudonim": "{" + pseudo + "}",
-                "Kontekst": "",
-            })
+            self._accumulated_records.append(
+                {
+                    "Oryginalna wartość": orig,
+                    "Typ danych": tag_type,
+                    "Wygenerowany pseudonim": "{" + pseudo + "}",
+                    "Kontekst": "",
+                }
+            )
 
     def reset_records(self):
         self._accumulated_records = []
@@ -134,15 +153,17 @@ class AnonymizerCore:
     @property
     def records(self):
         all_records = list(self._accumulated_records)
-        all_records.extend([
-            {
-                "Oryginalna wartość": orig,
-                "Typ danych": pseud.split("_")[0],
-                "Wygenerowany pseudonim": "{" + pseud + "}",
-                "Kontekst": "",
-            }
-            for orig, pseud in self.mapping.items()
-        ])
+        all_records.extend(
+            [
+                {
+                    "Oryginalna wartość": orig,
+                    "Typ danych": pseud.split("_")[0],
+                    "Wygenerowany pseudonim": "{" + pseud + "}",
+                    "Kontekst": "",
+                }
+                for orig, pseud in self.mapping.items()
+            ]
+        )
         return all_records
 
     @property

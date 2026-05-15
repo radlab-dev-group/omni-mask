@@ -6,7 +6,12 @@ import tkinter as tk
 
 from tkinter import filedialog, ttk, messagebox
 
-from omni_mask.core.logic import AnonymizerCore, DeanonymizerCore, ANON_TYPE_LABELS, PII_TYPE_LABELS
+from omni_mask.core.logic import (
+    AnonymizerCore,
+    DeanonymizerCore,
+    ANON_TYPE_LABELS,
+    PII_TYPE_LABELS,
+)
 from omni_mask.loaders.pdf_loader import PDFLoader
 from omni_mask.loaders.docx_loader import DocxLoader
 from omni_mask.loaders.excel_loader import ExcelLoader
@@ -284,7 +289,7 @@ class App(tk.Tk):
         self.deanon_progress_bar.pack(fill=tk.X, pady=10)
 
     def select_dir(self, var):
-        d = filedialog.askdirectory()
+        d = filedialog.askdirectory(initialdir=os.path.expanduser("~"))
         if d:
             var.set(d)
 
@@ -322,7 +327,9 @@ class App(tk.Tk):
         self.log("\n" + "=" * 50)
         self.log(">> START: Anonimizacja w toku...")
         threading.Thread(
-            target=self.anon_thread, args=(in_dir, out_dir, pii_enabled, enabled_fastmask), daemon=True
+            target=self.anon_thread,
+            args=(in_dir, out_dir, pii_enabled, enabled_fastmask),
+            daemon=True,
         ).start()
 
     def anon_thread(self, in_dir, out_dir, pii_enabled, enabled_fastmask):
@@ -346,15 +353,18 @@ class App(tk.Tk):
                     if loader.can_handle(filepath):
                         try:
                             loader.anonymize(
-                                filepath, outpath, self.anon_logic,
-                                pii_enabled=pii_enabled, enabled_fastmask=enabled_fastmask,
+                                filepath,
+                                outpath,
+                                self.anon_logic,
+                                pii_enabled=pii_enabled,
+                                enabled_fastmask=enabled_fastmask,
                             )
                             self.log(f"[{num}/{total}] Zakodowano: '{fname}'")
                             handled = True
                             break
                         except Exception as e:
                             self.log(
-                                   f"[{num}/{total}] [BŁĄD] Plik '{fname}': {str(e)}"
+                                f"[{num}/{total}] [BŁĄD] Plik '{fname}': {str(e)}"
                             )
                             handled = True  # Próbowaliśmy, ale błąd
                             break
@@ -419,13 +429,13 @@ class App(tk.Tk):
                             break
                         except NotImplementedError as e:
                             self.log(
-                                   f"[{num}/{total}] Zignorowano '{fname}' - {str(e)}"
+                                f"[{num}/{total}] Zignorowano '{fname}' - {str(e)}"
                             )
                             handled = True
                             break
                         except Exception as e:
                             self.log(
-                                   f"[{num}/{total}] [BŁĄD] Plik '{fname}': {str(e)}"
+                                f"[{num}/{total}] [BŁĄD] Plik '{fname}': {str(e)}"
                             )
                             handled = True
                             break
@@ -458,9 +468,8 @@ class App(tk.Tk):
 
     def export_mapping_internal(self, key_path):
         try:
-            # Merge FastMasker and PII records
-            all_records = list(self.anon_logic.records)
-            all_records.extend(self.anon_logic.pii_records)
+            # records property already merges accumulated (PII) + fastmasker mapping
+            all_records = self.anon_logic.records
 
             if not all_records:
                 self.log(
@@ -484,7 +493,7 @@ class App(tk.Tk):
             html_path = os.path.splitext(key_path)[0] + "_Raport_Zmian.html"
             html_content = [
                 "<html><head><meta charset='utf-8'><title>Raport Zmian</title>",
-                "<style>body{font-family: Arial;} table{border-collapse: collapse; width: 100%;} th, td{border: 1px solid #ddd; padding: 8px;} th{background-color: #f2f2f2;}</style>",
+                "<style>body{font-family: Arial;} table{border-collapse: collapse; width: 100%%; th, td{border: 1px solid #ddd; padding: 8px;} th{background-color: #f2f2f2;}</style>",
                 "</head><body><h2>Raport Zmian Anonimizacji</h2>",
                 "<table><tr><th>Oryginał</th><th>Kategoria</th><th>Pseudonim</th><th>Kontekst Zdania (Przed Zmianą)</th></tr>",
             ]

@@ -8,7 +8,14 @@ class PDFLoader(BaseLoader):
     def can_handle(self, filepath: str) -> bool:
         return filepath.lower().endswith(".pdf")
 
-    def anonymize(self, filepath: str, outpath: str, core: Any, pii_enabled: Set = None, enabled_fastmask: Set = None) -> None:
+    def anonymize(
+        self,
+        filepath: str,
+        outpath: str,
+        core: Any,
+        pii_enabled: Set = None,
+        enabled_fastmask: Set = None,
+    ) -> None:
         doc = fitz.open(filepath)
 
         # Collect all text from all pages
@@ -31,7 +38,10 @@ class PDFLoader(BaseLoader):
         if enabled_fastmask:
             rules = core._build_fastmask_rules(enabled_fastmask)
             if rules:
-                fm_masker = __import__('llm_router_plugins.maskers.fast_masker.core.masker', fromlist=['FastMasker']).FastMasker(rules)
+                fm_masker = __import__(
+                    "llm_router_plugins.maskers.fast_masker.core.masker",
+                    fromlist=["FastMasker"],
+                ).FastMasker(rules)
                 masked2, fm_mappings = fm_masker.mask(combined)
                 for pseudo, orig in fm_mappings.items():
                     if orig not in orig_to_pseudo:
