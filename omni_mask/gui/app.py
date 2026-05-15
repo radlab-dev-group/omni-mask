@@ -6,7 +6,7 @@ import tkinter as tk
 
 from tkinter import filedialog, ttk, messagebox
 
-from omni_mask.core.logic import AnonymizerCore, DeanonymizerCore, ANON_TYPE_LABELS
+from omni_mask.core.logic import AnonymizerCore, DeanonymizerCore, ANON_TYPE_LABELS, PII_TYPE_LABELS
 from omni_mask.loaders.pdf_loader import PDFLoader
 from omni_mask.loaders.docx_loader import DocxLoader
 from omni_mask.loaders.excel_loader import ExcelLoader
@@ -17,7 +17,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Aplikacja do Anonimizacji i Przywracania Danych")
-        self.geometry("800x780")
+        self.geometry("800x850")
 
         self.notebook = None
         self.log_area = None
@@ -38,6 +38,7 @@ class App(tk.Tk):
         self.deanon_progress_bar = None
 
         self.anon_type_vars = {}
+        self.pii_type_vars = {}
 
         self.anon_logic = AnonymizerCore()
         self.deanon_logic = DeanonymizerCore()
@@ -162,8 +163,12 @@ class App(tk.Tk):
             command=lambda: self.select_dir(self.anon_out_dir_var),
         ).pack(side=tk.LEFT)
 
+        # PII section
+        self.setup_pii_section()
+
+        # FastMasker section
         frame_types = ttk.LabelFrame(
-            self.tab_anon, text="Co anonimizować:", padding=8
+            self.tab_anon, text="Reguły FastMasker – co anonimizować:", padding=8
         )
         frame_types.pack(fill=tk.X, pady=8)
         self.anon_type_vars = {}
@@ -195,6 +200,20 @@ class App(tk.Tk):
             self.tab_anon, variable=self.progress_var, maximum=100
         )
         self.progress_bar.pack(fill=tk.X, pady=10)
+
+    def setup_pii_section(self):
+        frame_pii = ttk.LabelFrame(
+            self.tab_anon, text="PII (AI) – co anonimizować:", padding=8
+        )
+        frame_pii.pack(fill=tk.X, pady=8)
+        self.pii_type_vars = {}
+        for i, (key, label) in enumerate(PII_TYPE_LABELS.items()):
+            var = tk.BooleanVar(value=True)
+            self.pii_type_vars[key] = var
+            row, col = divmod(i, 2)
+            ttk.Checkbutton(frame_pii, text=label, variable=var).grid(
+                row=row, column=col, sticky="w", padx=10, pady=3
+            )
 
     def setup_deanon_tab(self):
         self.deanon_in_dir_var = tk.StringVar()
@@ -281,24 +300,32 @@ class App(tk.Tk):
             self.log("[BŁĄD] Wybierz oba katalogi (wejściowy i wyjściowy).")
             return
 
+        # Compute enabled sets from checkbox states
+        pii_enabled = {k for k, v in self.pii_type_vars.items() if v.get()}
+        enabled_fastmask = {k for k, v in self.anon_type_vars.items() if v.get()}
+
+        # Also update core.enabled for backward compat
         for key, var in self.anon_type_vars.items():
             self.anon_logic.enabled[key] = var.get()
 
-        if not any(self.anon_logic.enabled.values()):
+        if not pii_enabled and not enabled_fastmask:
             messagebox.showwarning(
                 "Anonimizacja",
                 "Zaznacz co najmniej jeden typ danych do anonimizacji.",
             )
             return
 
+        # Reset PII records from predictor
+        self.anon_logic._pii_mappings = {}
+
         self.btn_anon_run.config(state=tk.DISABLED)
         self.log("\n" + "=" * 50)
         self.log(">> START: Anonimizacja w toku...")
         threading.Thread(
-            target=self.anon_thread, args=(in_dir, out_dir), daemon=True
+            target=self.anon_thread, args=(in_dir, out_dir, pii_enabled, enabled_fastmask), daemon=True
         ).start()
 
-    def anon_thread(self, in_dir, out_dir):
+    def anon_thread(self, in_dir, out_dir, pii_enabled, enabled_fastmask):
         try:
             files = [
                 f
@@ -318,13 +345,16 @@ class App(tk.Tk):
                 for loader in self.loaders:
                     if loader.can_handle(filepath):
                         try:
-                            loader.anonymize(filepath, outpath, self.anon_logic)
+                            loader.anonymize(
+                                filepath, outpath, self.anon_logic,
+                                pii_enabled=pii_enabled, enabled_fastmask=enabled_fastmask,
+                            )
                             self.log(f"[{num}/{total}] Zakodowano: '{fname}'")
                             handled = True
                             break
                         except Exception as e:
                             self.log(
-                                f"[{num}/{total}] [BŁĄD] Plik '{fname}': {str(e)}"
+                                   f"[{num}/{total}] [BŁĄD] Plik '{fname}': {str(e)}"
                             )
                             handled = True  # Próbowaliśmy, ale błąd
                             break
@@ -389,13 +419,13 @@ class App(tk.Tk):
                             break
                         except NotImplementedError as e:
                             self.log(
-                                f"[{num}/{total}] Zignorowano '{fname}' - {str(e)}"
+                                   f"[{num}/{total}] Zignorowano '{fname}' - {str(e)}"
                             )
                             handled = True
                             break
                         except Exception as e:
                             self.log(
-                                f"[{num}/{total}] [BŁĄD] Plik '{fname}': {str(e)}"
+                                   f"[{num}/{total}] [BŁĄD] Plik '{fname}': {str(e)}"
                             )
                             handled = True
                             break
@@ -428,7 +458,11 @@ class App(tk.Tk):
 
     def export_mapping_internal(self, key_path):
         try:
-            if not self.anon_logic.records:
+            # Merge FastMasker and PII records
+            all_records = list(self.anon_logic.records)
+            all_records.extend(self.anon_logic.pii_records)
+
+            if not all_records:
                 self.log(
                     "[OSTRZEŻENIE] Brak danych (0 dopasowań). Klucz mapowania pusty."
                 )
@@ -441,7 +475,7 @@ class App(tk.Tk):
                     ]
                 )
             else:
-                df = pd.DataFrame(self.anon_logic.records)
+                df = pd.DataFrame(all_records)
             df.to_excel(key_path, index=False)
             self.log(
                 f"[SUKCES] Wygenerowano/zaktualizowano '{os.path.basename(key_path)}'"
@@ -454,7 +488,7 @@ class App(tk.Tk):
                 "</head><body><h2>Raport Zmian Anonimizacji</h2>",
                 "<table><tr><th>Oryginał</th><th>Kategoria</th><th>Pseudonim</th><th>Kontekst Zdania (Przed Zmianą)</th></tr>",
             ]
-            for r in self.anon_logic.records:
+            for r in all_records:
                 html_content.append(
                     f"<tr><td>{r.get('Oryginalna wartość', '')}</td><td>{r.get('Typ danych', '')}</td><td>{r.get('Wygenerowany pseudonim', '')}</td><td>{r.get('Kontekst', '')}</td></tr>"
                 )
