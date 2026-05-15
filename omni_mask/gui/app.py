@@ -165,7 +165,10 @@ class App(tk.Tk):
         ttk.Button(
             frame_out,
             text="Wybierz katalog",
-            command=lambda: self.select_dir(self.anon_out_dir_var, self.anon_in_dir_var.get() or os.path.expanduser("~")),
+            command=lambda: self.select_dir(
+                self.anon_out_dir_var,
+                self.anon_in_dir_var.get() or os.path.expanduser("~"),
+            ),
         ).pack(side=tk.LEFT)
 
         # PII section

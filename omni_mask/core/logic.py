@@ -195,14 +195,32 @@ class AnonymizerCore:
         return "{" + pseudo + "}"
 
     def save_mapping(self, path: str):
-        df = pd.DataFrame(self.records) if self.records else pd.DataFrame(
-            columns=["Oryginalna wartość", "Typ danych", "Wygenerowany pseudonim", "Kontekst"]
+        df = (
+            pd.DataFrame(self.records)
+            if self.records
+            else pd.DataFrame(
+                columns=[
+                    "Oryginalna wartość",
+                    "Typ danych",
+                    "Wygenerowany pseudonim",
+                    "Kontekst",
+                ]
+            )
         )
         df.to_excel(path, index=False)
 
     def get_mapping_df(self) -> pd.DataFrame:
-        return pd.DataFrame(self.records) if self.records else pd.DataFrame(
-            columns=["Oryginalna wartość", "Typ danych", "Wygenerowany pseudonim", "Kontekst"]
+        return (
+            pd.DataFrame(self.records)
+            if self.records
+            else pd.DataFrame(
+                columns=[
+                    "Oryginalna wartość",
+                    "Typ danych",
+                    "Wygenerowany pseudonim",
+                    "Kontekst",
+                ]
+            )
         )
 
 
