@@ -90,6 +90,7 @@ class AnonymizerCore:
         self.enabled = {k: True for k in ANON_TYPE_LABELS}
         self.pii_enabled = set(PII_TYPE_LABELS.keys())
         self._accumulated_records = []
+        self._fastmask_instances = []
 
     def _build_fastmask_rules(self, enabled_fastmask: set) -> list:
         rules = []
@@ -153,17 +154,35 @@ class AnonymizerCore:
     @property
     def records(self):
         all_records = list(self._accumulated_records)
-        all_records.extend(
-            [
+        # PII mapping from core._masker (backwards compat)
+        for orig, pseud in self.mapping.items():
+            all_records.append(
                 {
                     "Oryginalna wartość": orig,
                     "Typ danych": pseud.split("_")[0],
                     "Wygenerowany pseudonim": "{" + pseud + "}",
                     "Kontekst": "",
                 }
-                for orig, pseud in self.mapping.items()
-            ]
-        )
+            )
+        # FastMasker instances created by loaders
+        for fm in self._fastmask_instances:
+            logger.info(
+                "FM instance mapping: %d entries, keys=%s",
+                len(fm.mapping),
+                list(fm.mapping.keys())[:3],
+            )
+            for orig, pseud in fm.mapping.items():
+                all_records.append(
+                    {
+                        "Oryginalna wartość": orig,
+                        "Typ danych": pseud.split("_")[0],
+                        "Wygenerowany pseudonim": "{" + pseud + "}",
+                        "Kontekst": "",
+                    }
+                )
+        logger.info("records: accumulated=%d, fm_instances=%d, total=%d",
+                     len(self._accumulated_records), len(self._fastmask_instances),
+                     len(all_records))
         return all_records
 
     @property
@@ -175,10 +194,15 @@ class AnonymizerCore:
         return "{" + pseudo + "}"
 
     def save_mapping(self, path: str):
-        self._masker.save_mapping(path)
+        df = pd.DataFrame(self.records) if self.records else pd.DataFrame(
+            columns=["Oryginalna wartość", "Typ danych", "Wygenerowany pseudonim", "Kontekst"]
+        )
+        df.to_excel(path, index=False)
 
     def get_mapping_df(self) -> pd.DataFrame:
-        return self._masker.get_mapping_df()
+        return pd.DataFrame(self.records) if self.records else pd.DataFrame(
+            columns=["Oryginalna wartość", "Typ danych", "Wygenerowany pseudonim", "Kontekst"]
+        )
 
 
 class DeanonymizerCore:

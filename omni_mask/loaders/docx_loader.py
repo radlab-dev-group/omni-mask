@@ -67,6 +67,6 @@ def _process_segment(
                 "llm_router_plugins.maskers.fast_masker.core.masker",
                 fromlist=["FastMasker"],
             ).FastMasker(rules)
+            core._fastmask_instances.append(fm_masker)
             text, fm_mappings = fm_masker.mask(text)
-            core.accumulate_fastmask_mappings(fm_mappings)
     return text

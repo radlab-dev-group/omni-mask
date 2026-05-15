@@ -320,8 +320,9 @@ class App(tk.Tk):
             )
             return
 
-        # Reset PII records from predictor
-        self.anon_logic._pii_mappings = {}
+        # Reset records
+        self.anon_logic.reset_records()
+        self.anon_logic._fastmask_instances = []
 
         self.btn_anon_run.config(state=tk.DISABLED)
         self.log("\n" + "=" * 50)
@@ -373,6 +374,9 @@ class App(tk.Tk):
                     self.gui_queue.put(("ACTION", "PROGRESS", num, total))
 
             key_path = os.path.join(out_dir, "klucz_mapowania.xlsx")
+            self.log(f"[DEBUG] _fastmask_instances={len(self.anon_logic._fastmask_instances)}, accumulated={len(self.anon_logic._accumulated_records)}")
+            for i, fm in enumerate(self.anon_logic._fastmask_instances):
+                self.log(f"[DEBUG] fm[{i}] mapping_len={len(fm.mapping)} keys={list(fm.mapping.keys())[:3]}")
             self.export_mapping_internal(key_path)
         finally:
             self.log("Zakończono.")

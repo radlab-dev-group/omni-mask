@@ -29,6 +29,7 @@ class PDFLoader(BaseLoader):
         # PII first
         if pii_enabled:
             masked, pii_mappings = core.pii_anonymize_text(combined, pii_enabled)
+            core.accumulate_pii_mappings(pii_mappings)
             for tag, orig in pii_mappings.items():
                 if orig not in orig_to_pseudo:
                     orig_to_pseudo[orig] = "{" + tag + "}"
@@ -42,6 +43,7 @@ class PDFLoader(BaseLoader):
                     "llm_router_plugins.maskers.fast_masker.core.masker",
                     fromlist=["FastMasker"],
                 ).FastMasker(rules)
+                core._fastmask_instances.append(fm_masker)
                 masked2, fm_mappings = fm_masker.mask(combined)
                 for pseudo, orig in fm_mappings.items():
                     if orig not in orig_to_pseudo:
