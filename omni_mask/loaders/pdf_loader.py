@@ -10,23 +10,33 @@ class PDFLoader(BaseLoader):
 
     def anonymize(self, filepath: str, outpath: str, core: Any) -> None:
         doc = fitz.open(filepath)
-        for page in doc:
-            text = page.get_text("text")
-            matches = core.extract_matches(text)
-            unique_matches = {val: typ for typ, val in matches}
 
-            for val, typ in unique_matches.items():
-                pseudo = core.get_pseudo(val, typ)
-                for rect in page.search_for(val):
+        # Collect all text from all pages
+        page_texts = []
+        for page in doc:
+            page_texts.append(page.get_text("text"))
+
+        # Single mask() call — get consistent pseudonyms
+        combined = "\n".join(page_texts)
+        _, mappings = core._masker.mask(combined)
+
+        # Build {original: pseudonym} for PDF redaction
+        orig_to_pseudo = {}
+        for pseudo, orig in mappings.items():
+            if orig not in orig_to_pseudo:
+                orig_to_pseudo[orig] = "{" + pseudo + "}"
+
+        for page in doc:
+            for original, pseudonym in orig_to_pseudo.items():
+                for rect in page.search_for(original):
                     page.add_redact_annot(
                         rect,
-                        text=pseudo,
+                        text=pseudonym,
                         align=1,
                         fill=(0, 0, 0),
                         text_color=(1, 1, 1),
                     )
-
-            if unique_matches:
+            if orig_to_pseudo:
                 page.apply_redactions()
         doc.save(outpath, deflate=True, garbage=4)
         doc.close()

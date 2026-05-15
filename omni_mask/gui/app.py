@@ -6,8 +6,7 @@ import tkinter as tk
 
 from tkinter import filedialog, ttk, messagebox
 
-from omni_mask.core.logic import AnonymizerCore, DeanonymizerCore
-from omni_mask.utils.validators import ANON_TYPE_LABELS
+from omni_mask.core.logic import AnonymizerCore, DeanonymizerCore, ANON_TYPE_LABELS
 from omni_mask.loaders.pdf_loader import PDFLoader
 from omni_mask.loaders.docx_loader import DocxLoader
 from omni_mask.loaders.excel_loader import ExcelLoader
