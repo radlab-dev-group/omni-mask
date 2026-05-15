@@ -23,7 +23,19 @@ class AnonymizerCore:
         self._masker = FastMasker()
         self.mapping = self._masker.mapping
         self.enabled = {k: True for k in ANON_TYPE_LABELS}
-        self.records: list = []
+
+    @property
+    def records(self):
+        """Expose mapping as list of dicts compatible with the original export format."""
+        return [
+            {
+                "Oryginalna wartość": orig,
+                "Typ danych": pseud.split("_")[0],
+                "Wygenerowany pseudonim": "{" + pseud + "}",
+                "Kontekst": "",
+            }
+            for orig, pseud in self.mapping.items()
+        ]
 
     def get_pseudo(self, text: str, type_name: str) -> str:
         """Generate a pseudonym for *text*, caching it in the masker."""
@@ -33,7 +45,6 @@ class AnonymizerCore:
     def extract_matches(self, text: str):
         """Return a list of (type, value) tuples found in *text*."""
         _, mappings = self._masker.mask(text)
-        # mappings: {pseudonym: original_value}
         return [(p.split("_")[0], v) for p, v in mappings.items()]
 
     def anonymize_text(self, text: str) -> str:
