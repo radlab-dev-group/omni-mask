@@ -1,6 +1,9 @@
 import pandas as pd
 
-from llm_router_plugins.maskers.fast_masker.core.masker import FastMasker, FastDeanonymizer
+from llm_router_plugins.maskers.fast_masker.core.masker import (
+    FastMasker,
+    FastDeanonymizer,
+)
 
 
 # Labels for the type checkboxes in the UI — matches omni-mask's original 8 types
