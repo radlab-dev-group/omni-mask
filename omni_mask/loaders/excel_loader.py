@@ -16,7 +16,6 @@ class ExcelLoader(BaseLoader):
         pii_enabled: Set = None,
         enabled_fastmask: Set = None,
     ) -> None:
-        core.reset_records()
         wb = openpyxl.load_workbook(filepath)
         for sheet in wb.worksheets:
             for row in sheet.iter_rows():

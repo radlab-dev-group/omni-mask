@@ -165,7 +165,7 @@ class App(tk.Tk):
         ttk.Button(
             frame_out,
             text="Wybierz katalog",
-            command=lambda: self.select_dir(self.anon_out_dir_var),
+            command=lambda: self.select_dir(self.anon_out_dir_var, self.anon_in_dir_var.get() or os.path.expanduser("~")),
         ).pack(side=tk.LEFT)
 
         # PII section
@@ -199,6 +199,12 @@ class App(tk.Tk):
             command=self.export_mapping,
         )
         self.btn_anon_map.pack(side=tk.LEFT, padx=5)
+        self.btn_anon_copy = ttk.Button(
+            frame_btns,
+            text="Kopiuj logi",
+            command=self.copy_logs,
+        )
+        self.btn_anon_copy.pack(side=tk.LEFT, padx=5)
 
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(
@@ -288,8 +294,8 @@ class App(tk.Tk):
         )
         self.deanon_progress_bar.pack(fill=tk.X, pady=10)
 
-    def select_dir(self, var):
-        d = filedialog.askdirectory(initialdir=os.path.expanduser("~"))
+    def select_dir(self, var, initialdir=None):
+        d = filedialog.askdirectory(initialdir=initialdir or os.path.expanduser("~"))
         if d:
             var.set(d)
 
@@ -374,9 +380,6 @@ class App(tk.Tk):
                     self.gui_queue.put(("ACTION", "PROGRESS", num, total))
 
             key_path = os.path.join(out_dir, "klucz_mapowania.xlsx")
-            self.log(f"[DEBUG] _fastmask_instances={len(self.anon_logic._fastmask_instances)}, accumulated={len(self.anon_logic._accumulated_records)}")
-            for i, fm in enumerate(self.anon_logic._fastmask_instances):
-                self.log(f"[DEBUG] fm[{i}] mapping_len={len(fm.mapping)} keys={list(fm.mapping.keys())[:3]}")
             self.export_mapping_internal(key_path)
         finally:
             self.log("Zakończono.")
@@ -448,6 +451,14 @@ class App(tk.Tk):
         finally:
             self.log("Zakończono proces de-anonimizacji.")
             self.gui_queue.put(("ACTION", "ENABLE_DEANON"))
+
+    def copy_logs(self):
+        lines = []
+        for item in self.log_area.get_children():
+            lines.append(self.log_area.item(item, "values")[0])
+        self.clipboard_clear()
+        self.clipboard_append("\n".join(lines))
+        self.log("[INFO] Logi skopiowane do schowka.")
 
     def export_mapping(self):
         suggested_dir = self.anon_out_dir_var.get() or os.path.expanduser("~")

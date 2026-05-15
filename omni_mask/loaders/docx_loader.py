@@ -16,7 +16,6 @@ class DocxLoader(BaseLoader):
         pii_enabled: Set = None,
         enabled_fastmask: Set = None,
     ) -> None:
-        core.reset_records()
         doc = Document(filepath)
 
         for para in doc.paragraphs:

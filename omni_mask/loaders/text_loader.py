@@ -18,8 +18,6 @@ class TextLoader(BaseLoader):
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             text = f.read()
 
-        core.reset_records()
-
         # PII first
         if pii_enabled:
             text, pii_mappings = core.pii_anonymize_text(text, pii_enabled)

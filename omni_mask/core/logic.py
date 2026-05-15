@@ -152,6 +152,10 @@ class AnonymizerCore:
         self._accumulated_records = []
 
     @property
+    def pii_records(self):
+        return self._accumulated_records
+
+    @property
     def records(self):
         all_records = list(self._accumulated_records)
         # PII mapping from core._masker (backwards compat)
@@ -166,11 +170,6 @@ class AnonymizerCore:
             )
         # FastMasker instances created by loaders
         for fm in self._fastmask_instances:
-            logger.info(
-                "FM instance mapping: %d entries, keys=%s",
-                len(fm.mapping),
-                list(fm.mapping.keys())[:3],
-            )
             for orig, pseud in fm.mapping.items():
                 all_records.append(
                     {
@@ -180,14 +179,16 @@ class AnonymizerCore:
                         "Kontekst": "",
                     }
                 )
-        logger.info("records: accumulated=%d, fm_instances=%d, total=%d",
-                     len(self._accumulated_records), len(self._fastmask_instances),
-                     len(all_records))
-        return all_records
 
-    @property
-    def pii_records(self):
-        return self._accumulated_records
+        # Deduplicate by original value — same value can appear in multiple
+        # FastMasker instances with different pseudonyms; keep the first one
+        seen = set()
+        deduped = []
+        for r in all_records:
+            if r["Oryginalna wartość"] not in seen:
+                seen.add(r["Oryginalna wartość"])
+                deduped.append(r)
+        return deduped
 
     def get_pseudo(self, text: str, type_name: str) -> str:
         pseudo = self._masker._get_pseudo(text, type_name)
