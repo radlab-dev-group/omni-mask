@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Set
 from abc import ABC, abstractmethod
 
 
@@ -9,11 +9,18 @@ class BaseLoader(ABC):
         pass
 
     @abstractmethod
-    def anonymize(self, filepath: str, outpath: str, core: Any) -> None:
+    def anonymize(
+        self,
+        filepath: str,
+        outpath: str,
+        core: Any,
+        pii_enabled: Set = None,
+        enabled_fastmask: Set = None,
+    ) -> None:
         """Przeprowadza anonimizację pliku."""
         pass
 
     @abstractmethod
     def deanonymize(self, filepath: str, outpath: str, core: Any) -> None:
-        """Przeprowadza de-anonimizację pliku."""
+        """Przeprowadza de-anonimizację."""
         pass

@@ -1,184 +1,238 @@
-import re
+import logging
 import pandas as pd
 
-from omni_mask.utils.validators import (
-    PESEL_RE,
-    NIP_RE,
-    PHONE_RE,
-    ADDRESS_RE,
-    NAME_RE,
-    EMAIL_RE,
-    IBAN_RE,
-    IDCARD_RE,
-    is_valid_pesel,
-    is_valid_nip,
-    is_likely_person_name,
-    load_exclusions,
-    ANON_TYPE_LABELS,
+from llm_router_plugins.maskers.fast_masker.core.masker import (
+    FastMasker,
+    FastDeanonymizer,
 )
+from llm_router_plugins.maskers.fast_masker.rules import (
+    EmailRule,
+    PhoneRule,
+    PhoneInternationalRule,
+    BankAccountRule,
+    PassportRule,
+    IdCardRule,
+    PeselRule,
+    NipRule,
+)
+
+logger = logging.getLogger(__name__)
+
+# Try lazy import of AnonPredictor
+_anon_predictor_class = None
+_pii_import_error = None
+try:
+    from pii_classification.inference.inference import AnonPredictor
+
+    _anon_predictor_class = AnonPredictor
+except Exception as exc:
+    _pii_import_error = str(exc)
+
+if _pii_import_error:
+    logger.warning("PII AnonPredictor unavailable: %s", _pii_import_error)
+
+# Labels for the PII checkbox section — from anonymizer-model config
+PII_TYPE_LABELS = {
+    "LOCATION": "Lokalizacja",
+    "PERSON": "Osoba",
+    "FACILITY": "Obiekt",
+    "ORGANIZATION": "Organizacja",
+    "PRODUCT": "Produkt",
+    "EVENT": "Wydarzenie",
+    # "CONTACT/NUM": "Kontakt / Numer",
+    # "OTHER": "Inne",
+}
+
+# Labels for the FastMasker checkbox section
+ANON_TYPE_LABELS = {
+    "PESEL": "PESEL",
+    "NIP": "NIP (ID podatkowy)",
+    "TELEFON": "Numer telefonu",
+    "EMAIL": "Adres e-mail",
+    "KONTO_BANKOWE": "Konto bankowe (IBAN)",
+    "DOKUMENT_TOZSAMOSCI": "Dokument tożsamości",
+    "NAZWISKO": "Nazwisko (imię + nazwisko)",
+    "ADRES": "Adres",
+}
+
+# Map FastMasker type names to rule classes
+_FASTMASKER_RULES = {
+    "PESEL": PeselRule,
+    "NIP": NipRule,
+    "TELEFON": PhoneRule,
+    "EMAIL": EmailRule,
+    "KONTO_BANKOWE": BankAccountRule,
+    "DOKUMENT_TOZSAMOSCI": PassportRule,
+    "NAZWISKO": None,
+    "ADRES": None,
+}
+
+_pii_predictor = None
+
+
+def _get_pii_predictor():
+    global _pii_predictor
+    if _pii_import_error:
+        raise RuntimeError(
+            "AnonPredictor import failed: {}".format(_pii_import_error)
+        )
+    if _pii_predictor is None:
+        _pii_predictor = _anon_predictor_class("radlab/pii-pl-v1.0")
+    return _pii_predictor
 
 
 class AnonymizerCore:
+    """Wrapper around FastMasker that exposes the original omni-mask API with PII support."""
+
     def __init__(self):
-        self.mapping = {}
-        self.counters = {k: 1 for k in ANON_TYPE_LABELS}
+        self._masker = FastMasker()
+        self.mapping = self._masker.mapping
         self.enabled = {k: True for k in ANON_TYPE_LABELS}
-        self.records = []
-        self.exclusions = load_exclusions()
+        self.pii_enabled = set(PII_TYPE_LABELS.keys())
+        self._accumulated_records = []
+        self._fastmask_instances = []
 
-    def get_pseudo(self, text: str, type_name: str, context: str = "") -> str:
-        txt_norm = text.strip()
-        if txt_norm in self.mapping:
-            return self.mapping[txt_norm]
+    def _build_fastmask_rules(self, enabled_fastmask: set) -> list:
+        rules = []
+        for fm_type in enabled_fastmask:
+            rule_cls = _FASTMASKER_RULES.get(fm_type)
+            if rule_cls:
+                rules.append(rule_cls())
+        return rules
 
-        pseudo = f"[{type_name}_{self.counters[type_name]}]"
-        self.counters[type_name] += 1
-        self.mapping[txt_norm] = pseudo
-        self.records.append(
-            {
-                "Oryginalna wartość": txt_norm,
-                "Typ danych": type_name,
-                "Wygenerowany pseudonim": pseudo,
-                "Kontekst": f"...{context}..." if context else "",
-            }
+    def pii_anonymize_text(self, text: str, pii_enabled_labels: set) -> tuple:
+        """Return (masked_text, pii_mappings) without accumulating."""
+        predictor = _get_pii_predictor()
+        if not pii_enabled_labels:
+            return text, {}
+
+        target_labels = [
+            l for l in PII_TYPE_LABELS.keys() if l in pii_enabled_labels
+        ]
+        try:
+            result = predictor.predict_and_anonymize(text=text, labels=target_labels)
+        except Exception as exc:
+            logger.warning("PII prediction failed: %s", exc)
+            return text, {}
+        mappings = result.get("mappings", {})
+        if mappings and len(mappings) < 5 and len(text) > 200:
+            logger.warning(
+                "PII returned only %d mappings for text of length %d — "
+                "possible PyTorch 2.12 issue",
+                len(mappings),
+                len(text),
+            )
+        return result["text"], mappings
+
+    def accumulate_pii_mappings(self, mappings: dict):
+        for tag, orig in mappings.items():
+            tag_type = tag.split("_")[0]
+            self._accumulated_records.append(
+                {
+                    "Oryginalna wartość": orig,
+                    "Typ danych": tag_type,
+                    "Wygenerowany pseudonim": "{" + tag + "}",
+                    "Kontekst": "",
+                }
+            )
+
+    def accumulate_fastmask_mappings(self, mappings: dict):
+        for pseudo, orig in mappings.items():
+            tag_type = pseudo.split("_")[0]
+            self._accumulated_records.append(
+                {
+                    "Oryginalna wartość": orig,
+                    "Typ danych": tag_type,
+                    "Wygenerowany pseudonim": "{" + pseudo + "}",
+                    "Kontekst": "",
+                }
+            )
+
+    def reset_records(self):
+        self._accumulated_records = []
+
+    @property
+    def pii_records(self):
+        return self._accumulated_records
+
+    @property
+    def records(self):
+        all_records = list(self._accumulated_records)
+        # PII mapping from core._masker (backwards compat)
+        for orig, pseud in self.mapping.items():
+            all_records.append(
+                {
+                    "Oryginalna wartość": orig,
+                    "Typ danych": pseud.split("_")[0],
+                    "Wygenerowany pseudonim": "{" + pseud + "}",
+                    "Kontekst": "",
+                }
+            )
+        # FastMasker instances created by loaders
+        for fm in self._fastmask_instances:
+            for orig, pseud in fm.mapping.items():
+                all_records.append(
+                    {
+                        "Oryginalna wartość": orig,
+                        "Typ danych": pseud.split("_")[0],
+                        "Wygenerowany pseudonim": "{" + pseud + "}",
+                        "Kontekst": "",
+                    }
+                )
+
+        # Deduplicate by original value — same value can appear in multiple
+        # FastMasker instances with different pseudonyms; keep the first one
+        seen = set()
+        deduped = []
+        for r in all_records:
+            if r["Oryginalna wartość"] not in seen:
+                seen.add(r["Oryginalna wartość"])
+                deduped.append(r)
+        return deduped
+
+    def get_pseudo(self, text: str, type_name: str) -> str:
+        pseudo = self._masker._get_pseudo(text, type_name)
+        return "{" + pseudo + "}"
+
+    def save_mapping(self, path: str):
+        df = (
+            pd.DataFrame(self.records)
+            if self.records
+            else pd.DataFrame(
+                columns=[
+                    "Oryginalna wartość",
+                    "Typ danych",
+                    "Wygenerowany pseudonim",
+                    "Kontekst",
+                ]
+            )
         )
-        return pseudo
+        df.to_excel(path, index=False)
 
-    def get_context(self, full_text: str, match_obj) -> str:
-        start = max(0, match_obj.start() - 40)
-        end = min(len(full_text), match_obj.end() + 40)
-        return full_text[start:end].replace("\n", " ")
-
-    def extract_matches(self, text: str):
-        matches = []
-        if not isinstance(text, str):
-            return matches
-        en = self.enabled
-
-        if en.get("PESEL", True):
-            for m in PESEL_RE.finditer(text):
-                if is_valid_pesel(m.group(0)):
-                    matches.append(("PESEL", m.group(0)))
-        if en.get("NIP", True):
-            for m in NIP_RE.finditer(text):
-                if is_valid_nip(m.group(0)):
-                    matches.append(("NIP", m.group(0)))
-        if en.get("TELEFON", True):
-            for m in PHONE_RE.finditer(text):
-                matches.append(("TELEFON", m.group(0)))
-        if en.get("ADRES", True):
-            for m in ADDRESS_RE.finditer(text):
-                matches.append(("ADRES", m.group(0)))
-        if en.get("NAZWISKO", True):
-            for m in NAME_RE.finditer(text):
-                if is_likely_person_name(m.group(0), self.exclusions):
-                    matches.append(("NAZWISKO", m.group(0)))
-        if en.get("EMAIL", True):
-            for m in EMAIL_RE.finditer(text):
-                matches.append(("EMAIL", m.group(0)))
-        if en.get("KONTO_BANKOWE", True):
-            for m in IBAN_RE.finditer(text):
-                matches.append(("KONTO_BANKOWE", m.group(0)))
-        if en.get("DOKUMENT_TOZSAMOSCI", True):
-            for m in IDCARD_RE.finditer(text):
-                matches.append(("DOKUMENT_TOZSAMOSCI", m.group(0)))
-
-        return matches
-
-    def anonymize_text(self, text: str) -> str:
-        if not isinstance(text, str):
-            return text
-        en = self.enabled
-
-        if en.get("PESEL", True):
-            text = PESEL_RE.sub(
-                lambda m: (
-                    self.get_pseudo(m.group(0), "PESEL", self.get_context(text, m))
-                    if is_valid_pesel(m.group(0))
-                    else m.group(0)
-                ),
-                text,
+    def get_mapping_df(self) -> pd.DataFrame:
+        return (
+            pd.DataFrame(self.records)
+            if self.records
+            else pd.DataFrame(
+                columns=[
+                    "Oryginalna wartość",
+                    "Typ danych",
+                    "Wygenerowany pseudonim",
+                    "Kontekst",
+                ]
             )
-        if en.get("NIP", True):
-            text = NIP_RE.sub(
-                lambda m: (
-                    self.get_pseudo(m.group(0), "NIP", self.get_context(text, m))
-                    if is_valid_nip(m.group(0))
-                    else m.group(0)
-                ),
-                text,
-            )
-        if en.get("TELEFON", True):
-            text = PHONE_RE.sub(
-                lambda m: self.get_pseudo(
-                    m.group(0), "TELEFON", self.get_context(text, m)
-                ),
-                text,
-            )
-        if en.get("ADRES", True):
-            text = ADDRESS_RE.sub(
-                lambda m: self.get_pseudo(
-                    m.group(0), "ADRES", self.get_context(text, m)
-                ),
-                text,
-            )
-        if en.get("EMAIL", True):
-            text = EMAIL_RE.sub(
-                lambda m: self.get_pseudo(
-                    m.group(0), "EMAIL", self.get_context(text, m)
-                ),
-                text,
-            )
-        if en.get("KONTO_BANKOWE", True):
-            text = IBAN_RE.sub(
-                lambda m: self.get_pseudo(
-                    m.group(0), "KONTO_BANKOWE", self.get_context(text, m)
-                ),
-                text,
-            )
-        if en.get("DOKUMENT_TOZSAMOSCI", True):
-            text = IDCARD_RE.sub(
-                lambda m: self.get_pseudo(
-                    m.group(0), "DOKUMENT_TOZSAMOSCI", self.get_context(text, m)
-                ),
-                text,
-            )
-        if en.get("NAZWISKO", True):
-
-            def repl_name(m):
-                val = m.group(0)
-                if val.startswith("[") and val.endswith("]"):
-                    return val
-                if not is_likely_person_name(val, self.exclusions):
-                    return val
-                return self.get_pseudo(val, "NAZWISKO", self.get_context(text, m))
-
-            text = NAME_RE.sub(repl_name, text)
-
-        return text
+        )
 
 
 class DeanonymizerCore:
     def __init__(self):
-        self.reverse_map = {}
-        self.pattern = None
+        self._deanonymizer = FastDeanonymizer()
 
     def load_key(self, key_path: str):
-        try:
-            df = pd.read_excel(key_path)
-            self.reverse_map = {
-                str(row["Wygenerowany pseudonim"]): str(row["Oryginalna wartość"])
-                for _, row in df.iterrows()
-            }
-            if not self.reverse_map:
-                return False, "Klucz mapowania jest pusty."
-            keys = sorted(self.reverse_map.keys(), key=len, reverse=True)
-            self.pattern = re.compile("|".join([re.escape(str(k)) for k in keys]))
-            return True, f"Wczytano {len(self.reverse_map)} par z klucza."
-        except Exception as e:
-            return False, f"Błąd wczytywania klucza: {str(e)}"
+        success = self._deanonymizer.load_mapping(key_path)
+        if not success:
+            return False, "Klucz mapowania jest pusty lub nie udało się go wczytać."
+        return True, f"Wczytano {len(self._deanonymizer.reverse_map)} par z klucza."
 
     def deanonymize_text(self, text: str) -> str:
-        if not isinstance(text, str) or not self.pattern:
-            return text
-        return self.pattern.sub(lambda m: self.reverse_map[m.group(0)], text)
+        return self._deanonymizer.deanonymize(text)

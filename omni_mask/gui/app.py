@@ -6,8 +6,12 @@ import tkinter as tk
 
 from tkinter import filedialog, ttk, messagebox
 
-from omni_mask.core.logic import AnonymizerCore, DeanonymizerCore
-from omni_mask.utils.validators import ANON_TYPE_LABELS
+from omni_mask.core.logic import (
+    AnonymizerCore,
+    DeanonymizerCore,
+    ANON_TYPE_LABELS,
+    PII_TYPE_LABELS,
+)
 from omni_mask.loaders.pdf_loader import PDFLoader
 from omni_mask.loaders.docx_loader import DocxLoader
 from omni_mask.loaders.excel_loader import ExcelLoader
@@ -18,7 +22,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Aplikacja do Anonimizacji i Przywracania Danych")
-        self.geometry("800x780")
+        self.geometry("800x850")
 
         self.notebook = None
         self.log_area = None
@@ -39,6 +43,7 @@ class App(tk.Tk):
         self.deanon_progress_bar = None
 
         self.anon_type_vars = {}
+        self.pii_type_vars = {}
 
         self.anon_logic = AnonymizerCore()
         self.deanon_logic = DeanonymizerCore()
@@ -160,11 +165,18 @@ class App(tk.Tk):
         ttk.Button(
             frame_out,
             text="Wybierz katalog",
-            command=lambda: self.select_dir(self.anon_out_dir_var),
+            command=lambda: self.select_dir(
+                self.anon_out_dir_var,
+                self.anon_in_dir_var.get() or os.path.expanduser("~"),
+            ),
         ).pack(side=tk.LEFT)
 
+        # PII section
+        self.setup_pii_section()
+
+        # FastMasker section
         frame_types = ttk.LabelFrame(
-            self.tab_anon, text="Co anonimizować:", padding=8
+            self.tab_anon, text="Reguły FastMasker – co anonimizować:", padding=8
         )
         frame_types.pack(fill=tk.X, pady=8)
         self.anon_type_vars = {}
@@ -190,12 +202,32 @@ class App(tk.Tk):
             command=self.export_mapping,
         )
         self.btn_anon_map.pack(side=tk.LEFT, padx=5)
+        self.btn_anon_copy = ttk.Button(
+            frame_btns,
+            text="Kopiuj logi",
+            command=self.copy_logs,
+        )
+        self.btn_anon_copy.pack(side=tk.LEFT, padx=5)
 
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(
             self.tab_anon, variable=self.progress_var, maximum=100
         )
         self.progress_bar.pack(fill=tk.X, pady=10)
+
+    def setup_pii_section(self):
+        frame_pii = ttk.LabelFrame(
+            self.tab_anon, text="PII (AI) – co anonimizować:", padding=8
+        )
+        frame_pii.pack(fill=tk.X, pady=8)
+        self.pii_type_vars = {}
+        for i, (key, label) in enumerate(PII_TYPE_LABELS.items()):
+            var = tk.BooleanVar(value=True)
+            self.pii_type_vars[key] = var
+            row, col = divmod(i, 2)
+            ttk.Checkbutton(frame_pii, text=label, variable=var).grid(
+                row=row, column=col, sticky="w", padx=10, pady=3
+            )
 
     def setup_deanon_tab(self):
         self.deanon_in_dir_var = tk.StringVar()
@@ -265,8 +297,8 @@ class App(tk.Tk):
         )
         self.deanon_progress_bar.pack(fill=tk.X, pady=10)
 
-    def select_dir(self, var):
-        d = filedialog.askdirectory()
+    def select_dir(self, var, initialdir=None):
+        d = filedialog.askdirectory(initialdir=initialdir or os.path.expanduser("~"))
         if d:
             var.set(d)
 
@@ -282,24 +314,35 @@ class App(tk.Tk):
             self.log("[BŁĄD] Wybierz oba katalogi (wejściowy i wyjściowy).")
             return
 
+        # Compute enabled sets from checkbox states
+        pii_enabled = {k for k, v in self.pii_type_vars.items() if v.get()}
+        enabled_fastmask = {k for k, v in self.anon_type_vars.items() if v.get()}
+
+        # Also update core.enabled for backward compat
         for key, var in self.anon_type_vars.items():
             self.anon_logic.enabled[key] = var.get()
 
-        if not any(self.anon_logic.enabled.values()):
+        if not pii_enabled and not enabled_fastmask:
             messagebox.showwarning(
                 "Anonimizacja",
                 "Zaznacz co najmniej jeden typ danych do anonimizacji.",
             )
             return
 
+        # Reset records
+        self.anon_logic.reset_records()
+        self.anon_logic._fastmask_instances = []
+
         self.btn_anon_run.config(state=tk.DISABLED)
         self.log("\n" + "=" * 50)
         self.log(">> START: Anonimizacja w toku...")
         threading.Thread(
-            target=self.anon_thread, args=(in_dir, out_dir), daemon=True
+            target=self.anon_thread,
+            args=(in_dir, out_dir, pii_enabled, enabled_fastmask),
+            daemon=True,
         ).start()
 
-    def anon_thread(self, in_dir, out_dir):
+    def anon_thread(self, in_dir, out_dir, pii_enabled, enabled_fastmask):
         try:
             files = [
                 f
@@ -319,7 +362,13 @@ class App(tk.Tk):
                 for loader in self.loaders:
                     if loader.can_handle(filepath):
                         try:
-                            loader.anonymize(filepath, outpath, self.anon_logic)
+                            loader.anonymize(
+                                filepath,
+                                outpath,
+                                self.anon_logic,
+                                pii_enabled=pii_enabled,
+                                enabled_fastmask=enabled_fastmask,
+                            )
                             self.log(f"[{num}/{total}] Zakodowano: '{fname}'")
                             handled = True
                             break
@@ -406,6 +455,14 @@ class App(tk.Tk):
             self.log("Zakończono proces de-anonimizacji.")
             self.gui_queue.put(("ACTION", "ENABLE_DEANON"))
 
+    def copy_logs(self):
+        lines = []
+        for item in self.log_area.get_children():
+            lines.append(self.log_area.item(item, "values")[0])
+        self.clipboard_clear()
+        self.clipboard_append("\n".join(lines))
+        self.log("[INFO] Logi skopiowane do schowka.")
+
     def export_mapping(self):
         suggested_dir = self.anon_out_dir_var.get() or os.path.expanduser("~")
         f = filedialog.asksaveasfilename(
@@ -429,7 +486,10 @@ class App(tk.Tk):
 
     def export_mapping_internal(self, key_path):
         try:
-            if not self.anon_logic.records:
+            # records property already merges accumulated (PII) + fastmasker mapping
+            all_records = self.anon_logic.records
+
+            if not all_records:
                 self.log(
                     "[OSTRZEŻENIE] Brak danych (0 dopasowań). Klucz mapowania pusty."
                 )
@@ -442,7 +502,7 @@ class App(tk.Tk):
                     ]
                 )
             else:
-                df = pd.DataFrame(self.anon_logic.records)
+                df = pd.DataFrame(all_records)
             df.to_excel(key_path, index=False)
             self.log(
                 f"[SUKCES] Wygenerowano/zaktualizowano '{os.path.basename(key_path)}'"
@@ -451,11 +511,11 @@ class App(tk.Tk):
             html_path = os.path.splitext(key_path)[0] + "_Raport_Zmian.html"
             html_content = [
                 "<html><head><meta charset='utf-8'><title>Raport Zmian</title>",
-                "<style>body{font-family: Arial;} table{border-collapse: collapse; width: 100%;} th, td{border: 1px solid #ddd; padding: 8px;} th{background-color: #f2f2f2;}</style>",
+                "<style>body{font-family: Arial;} table{border-collapse: collapse; width: 100%%; th, td{border: 1px solid #ddd; padding: 8px;} th{background-color: #f2f2f2;}</style>",
                 "</head><body><h2>Raport Zmian Anonimizacji</h2>",
                 "<table><tr><th>Oryginał</th><th>Kategoria</th><th>Pseudonim</th><th>Kontekst Zdania (Przed Zmianą)</th></tr>",
             ]
-            for r in self.anon_logic.records:
+            for r in all_records:
                 html_content.append(
                     f"<tr><td>{r.get('Oryginalna wartość', '')}</td><td>{r.get('Typ danych', '')}</td><td>{r.get('Wygenerowany pseudonim', '')}</td><td>{r.get('Kontekst', '')}</td></tr>"
                 )

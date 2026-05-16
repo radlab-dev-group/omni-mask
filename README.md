@@ -1,8 +1,15 @@
 ## 🇬🇧 Omni‑Mask – What the repository actually contains
 
-### Installation
+Omni‑Mask is a dual‑tier anonymization tool:
 
-1. **Clone the repository**
+1. **PII detection** (AI‑based) – uses
+   the [anonymizer-model](https://github.com/radlab-dev-group/anonymizer-model.git) (`AnonPredictor`, model
+   `radlab/pii-pl-v1.0`) to identify persons, locations, organizations, etc.
+2. **Pattern-based masking** – uses
+   the [llm-router-plugins FastMasker](https://github.com/radlab-dev-group/llm-router-plugins.git) (`FastMasker`,
+   `FastDeanonymizer` and 30+ rules) to detect PESEL, NIP, IBAN, emails, IPs, credit cards, VINs and more.
+
+### Installation
 
 ```shell script
 git clone https://github.com/radlab-dev-group/omni-mask.git
@@ -25,6 +32,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Core dependencies: `pandas`, `openpyxl`, `python-docx`, `PyMuPDF`, plus external anonymization packages:
+
+- [anonymizer-model](https://github.com/radlab-dev-group/anonymizer-model.git) (`pii-classification` — PII detection via
+  `AnonPredictor`)
+- [llm-router-plugins](https://github.com/radlab-dev-group/llm-router-plugins.git) (`llm-router-plugins` — `FastMasker`,
+  `FastDeanonymizer` and 30+ masking rules)
+
 *`tkinter` comes with the standard Python distribution, so no extra step is needed.*
 
 4. **(Optional) Install the project in editable mode** – useful for development
@@ -46,7 +60,7 @@ omni_mask/
 │
 ├─ core/
 │   ├─ __init__.py
-│   └─ logic.py                # AnonymizerCore, DeanonymizerCore
+│   └─ logic.py                # AnonMaskingCore (wraps FastMasker + PII), DeanonymizerCore (wraps FastDeanonymizer)
 │
 ├─ gui/
 │   ├─ __init__.py
@@ -61,46 +75,81 @@ omni_mask/
 │   └─ text_loader.py          # .txt/.csv handling
 │
 ├─ resources/
-│   └─ config.json             # word‑lists and exclusion rules
+│   └─ config.json             # word‑lists and exclusion rules (legacy)
 │
 ├─ utils/
 │   ├─ __init__.py
-│   └─ validators.py           # regexes, validation helpers, config loader,
-│                              # ANON_TYPE_LABELS dictionary
+│   └─ validators.py           # legacy regexes & validation helpers
 │
 └─ __init__.py
+
+fast_masker/                     # copy of llm-router-plugins FastMasker (external: github.com/radlab-dev-group/llm-router-plugins)
+├─ fast_masker_plugin.py         # FastMaskerPlugin – entry point
+├─ core/
+│   ├─ __init__.py               # FastMasker, MaskerRuleI
+│   ├─ masker.py                 # FastMasker, FastDeanonymizer
+│   └─ rule_interface.py         # MaskerRuleI base class
+├─ rules/                        # 30+ rules: PeselRule, NipRule, EmailRule, CreditCardRule, VinRule, etc.
+└─ utils/
+    └─ validators.py             # checksum validation helpers
 ```
 
 ### Core logic (`omni_mask/core/logic.py`)
 
-* **`AnonymizerCore`**
-    * Keeps a mapping of original values → pseudonyms.
-    * Generates deterministic placeholders like `[PESEL_1]`, `[NIP_2]`, etc.
-    * Provides `extract_matches`, `anonymize_text`, and helper methods for context extraction.
-    * Uses the regexes and validation functions from `utils.validators`.
+* **`AnonMaskingCore`** – wrapper around `FastMasker` + PII predictor
+    * `pii_enabled` / `enabled_fastmask` – sets of type labels from `PII_TYPE_LABELS` and `ANON_TYPE_LABELS`
+    * `pii_anonymize_text(text, pii_labels)` → `(masked_text, mappings)` – calls `AnonPredictor` to find PII in the text
+    * `accumulate_pii_mappings(mappings)` – stores PII mappings for later export
+    * `_build_fastmask_rules(enabled_fastmask)` → `[Rule, …]` – selects FastMasker rules by type (PESEL, NIP, EMAIL,
+      etc.)
+    * `records` property – merges accumulated PII mappings + FastMasker mappings into a single dict
+    * Generates deterministic placeholders like `[PESEL_1]`, `[EMAIL_2]`, `{{EMAIL}}`, `{{PERSON}}`, etc.
+    * Provides `anonymize_text` and helper methods for context extraction (delegates to FastMasker)
 
 * **`DeanonymizerCore`**
-    * Loads a mapping key (Excel file) created by the anonymiser.
-    * Builds a compiled regex that matches all pseudonyms.
-    * Replaces pseudonyms with the original values in a given text.
+    * Wraps `FastDeanonymizer` from `llm_router_plugins`
+    * Loads a mapping key (Excel file) created by the anonymiser
+    * Replaces pseudonyms with original values via `deanonymize(text)`
 
-### Validation utilities (`omni_mask/utils/validators.py`)
+### PII type labels (`PII_TYPE_LABELS`)
 
-* Regular expressions for PESEL, NIP, phone, address, name, e‑mail, IBAN, identity‑card.
-* Functions: `is_valid_pesel`, `is_valid_nip`, `is_likely_person_name`.
-* `load_exclusions()` reads the default exclusions from the JSON config and an optional `nie_koduj.txt`.
-* `ANON_TYPE_LABELS` maps internal type keys to human‑readable labels.
+Types detected by the AI‑based `AnonPredictor` (model `radlab/pii-pl-v1.0`):
+
+| Key            | Label       |
+|----------------|-------------|
+| `LOCATION`     | Lokalizacja |
+| `PERSON`       | Osoba       |
+| `FACILITY`     | Obiekt      |
+| `ORGANIZATION` | Organizacja |
+| `PRODUCT`      | Produkt     |
+| `EVENT`        | Wydarzenie  |
+
+### FastMasker type labels (`ANON_TYPE_LABELS`)
+
+Pattern types detected by FastMasker rules:
+
+| Key                   | Label                |
+|-----------------------|----------------------|
+| `PESEL`               | PESEL                |
+| `NIP`                 | NIP (ID podatkowy)   |
+| `TELEFON`             | Numer telefonu       |
+| `EMAIL`               | Adres e-mail         |
+| `KONTO_BANKOWE`       | Konto bankowe (IBAN) |
+| `DOKUMENT_TOZSAMOSCI` | Dokument tożsamości  |
+| `NAZWISKO`            | Nazwisko             |
+| `ADRES`               | Adres                |
 
 ### Loaders (`omni_mask/loaders/`)
 
-All loaders inherit from `BaseLoader` and implement three methods:
+All loaders inherit from `BaseLoader` and implement `anonymize(in_dir, out_dir, pii_enabled, enabled_fastmask)` and
+`deanonymize(in_dir, out_dir, key_path)`:
 
-| Loader        | File extensions handled | `anonymize`                                                                                                      | `deanonymize`                                           |
-|---------------|-------------------------|------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------|
-| `DocxLoader`  | `.docx`, `.doc`         | Reads a `python-docx` document, replaces text in paragraphs, runs, and tables.                                   | Reverses the replacement.                               |
-| `ExcelLoader` | `.xlsx`, `.xls`         | Opens with `openpyxl`, processes every cell containing a string.                                                 | Reverses the replacement.                               |
-| `PDFLoader`   | `.pdf`                  | Uses PyMuPDF (`fitz`). Finds matches, creates redaction annotations with the pseudonym, then applies redactions. | Raises `NotImplementedError` (PDFs cannot be restored). |
-| `TextLoader`  | `.txt`, `.csv`          | Reads the whole file as UTF‑8 text, runs `core.anonymize_text`, writes back.                                     | Runs `core.deanonymize_text` similarly.                 |
+| Loader        | File extensions handled | `anonymize`                                                                                                        | `deanonymize`                                            |
+|---------------|-------------------------|--------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
+| `DocxLoader`  | `.docx`, `.doc`         | PII via `AnonPredictor` first, then pattern rules via `FastMasker`. Replaces text in paragraphs, runs, and tables. | Uses `FastDeanonymizer.deanonymize()` to restore values. |
+| `ExcelLoader` | `.xlsx`, `.xls`         | Same dual pipeline – PII first, then FastMasker. Processes every cell containing a string.                         | Uses `FastDeanonymizer.deanonymize()` to restore values. |
+| `PDFLoader`   | `.pdf`                  | PII via `AnonPredictor`, then FastMasker via `PyMuPDF` redaction annotations.                                      | Raises `NotImplementedError` (PDFs cannot be restored).  |
+| `TextLoader`  | `.txt`, `.csv`          | PII + FastMasker applied sequentially on the whole file content; writes masked output back.                        | Uses `FastDeanonymizer.deanonymize()` to restore values. |
 
 `BaseLoader` defines the abstract interface (`can_handle`, `anonymize`, `deanonymize`).
 
@@ -110,18 +159,9 @@ All loaders inherit from `BaseLoader` and implement three methods:
 * Two notebook tabs: **Anonymisation** and **De‑anonymisation**.
 * UI elements for selecting input/output directories, choosing which data types to mask, and specifying the mapping key
   file for de‑anonymisation.
+* **PII checkbox section** – checkboxes for each type in `PII_TYPE_LABELS` (LOCATION, PERSON, ORGANIZATION, …).
+* **FastMasker checkbox section** – checkboxes for each type in `ANON_TYPE_LABELS` (PESEL, NIP, EMAIL, …).
 * Background threads perform the heavy work; a `queue.Queue` delivers log messages and progress updates to the UI.
 * After anonymisation it automatically writes:
     * `klucz_mapowania.xlsx` – Excel file with columns *Original value*, *Data type*, *Generated pseudonym*, *Context*.
     * An HTML audit report (`*_Raport_Zmian.html`).
-
-### Configuration (`omni_mask/resources/config.json`)
-
-Contains four lists used by the name‑validation logic:
-
-* `non_name_words` – words that must not be treated as personal names.
-* `blocked_name_bigrams` – pairs of words that, when occurring together, are excluded as names.
-* `non_name_suffixes` – suffixes indicating a word is not a surname.
-* `default_exclusions` – generic terms excluded from name detection.
-
-The JSON is loaded by `validators.Config` at import time.
