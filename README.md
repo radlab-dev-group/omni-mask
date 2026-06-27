@@ -53,6 +53,10 @@ pip install -e .
 python -m omni_mask.gui.app
 ```
 
+### Building macOS apps (.app)
+
+To package Omni-Mask as a standalone macOS application (Apple Silicon and/or Intel), see **[BUILD-PL.md](BUILD-PL.md)** (Polish).
+
 ### Package layout
 
 ```

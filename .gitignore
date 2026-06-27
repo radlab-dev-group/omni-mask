@@ -26,11 +26,12 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+# macOS
+.DS_Store
+
+# PyInstaller / macOS app builds
 *.manifest
-*.spec
+!omni_mask.spec
 
 # Installer logs
 pip-log.txt
@@ -138,6 +139,14 @@ celerybeat.pid
 .env
 .envrc
 .venv
+.venv-x86_64
+.miniforge-x86_64/
+.miniconda-x86_64/
+.cache/
+build-arm64/
+build-x86_64/
+dist-arm64/
+dist-x86_64/
 env/
 venv/
 ENV/

@@ -54,6 +54,10 @@ pip install -e .
 python -m omni_mask.gui.app
 ```
 
+### Budowanie aplikacji macOS (.app)
+
+Aby spakować Omni-Mask do samodzielnej aplikacji na macOS (Apple Silicon i/lub Intel), zobacz **[BUILD-PL.md](BUILD-PL.md)**.
+
 ### Struktura pakietu
 
 ```
