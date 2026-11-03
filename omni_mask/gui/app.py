@@ -139,10 +139,20 @@ class App(tk.Tk):
     def setup_anon_tab(self):
         self.anon_in_dir_var = tk.StringVar()
         self.anon_out_dir_var = tk.StringVar()
+        self.anon_key_dir_var = tk.StringVar()
+
+        lbl_warn_anon = ttk.Label(
+            self.tab_anon,
+            text="⚠️ BEZPIECZEŃSTWO: Plik klucza mapowania (.xlsx) zawiera oryginalne dane wrażliwe.\nPrzechowuj go w bezpiecznym miejscu i NIE przesyłaj go do modeli AI ani chmury!",
+            foreground="#c0392b",
+            font=("Helvetica", 9, "bold"),
+            justify=tk.LEFT,
+        )
+        lbl_warn_anon.pack(fill=tk.X, pady=(0, 10))
 
         frame_in = ttk.Frame(self.tab_anon)
         frame_in.pack(fill=tk.X, pady=5)
-        ttk.Label(frame_in, text="Katalog wejściowy z dokumentami:", width=30).pack(
+        ttk.Label(frame_in, text="Katalog wejściowy z dokumentami:", width=35).pack(
             side=tk.LEFT
         )
         ttk.Entry(
@@ -156,7 +166,7 @@ class App(tk.Tk):
 
         frame_out = ttk.Frame(self.tab_anon)
         frame_out.pack(fill=tk.X, pady=5)
-        ttk.Label(frame_out, text="Katalog dla zanonimizowanych:", width=30).pack(
+        ttk.Label(frame_out, text="Katalog dla zanonimizowanych:", width=35).pack(
             side=tk.LEFT
         )
         ttk.Entry(
@@ -167,6 +177,25 @@ class App(tk.Tk):
             text="Wybierz katalog",
             command=lambda: self.select_dir(
                 self.anon_out_dir_var,
+                self.anon_in_dir_var.get() or os.path.expanduser("~"),
+            ),
+        ).pack(side=tk.LEFT)
+
+        frame_key_out = ttk.Frame(self.tab_anon)
+        frame_key_out.pack(fill=tk.X, pady=5)
+        ttk.Label(
+            frame_key_out,
+            text="Katalog na klucz mapowania (bezpieczny):",
+            width=35,
+        ).pack(side=tk.LEFT)
+        ttk.Entry(
+            frame_key_out, textvariable=self.anon_key_dir_var, state="readonly"
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Button(
+            frame_key_out,
+            text="Wybierz katalog",
+            command=lambda: self.select_dir(
+                self.anon_key_dir_var,
                 self.anon_in_dir_var.get() or os.path.expanduser("~"),
             ),
         ).pack(side=tk.LEFT)
@@ -310,6 +339,7 @@ class App(tk.Tk):
     def start_anon_processing(self):
         in_dir = self.anon_in_dir_var.get()
         out_dir = self.anon_out_dir_var.get()
+        key_dir = self.anon_key_dir_var.get() or out_dir
         if not in_dir or not out_dir:
             self.log("[BŁĄD] Wybierz oba katalogi (wejściowy i wyjściowy).")
             return
@@ -336,13 +366,22 @@ class App(tk.Tk):
         self.btn_anon_run.config(state=tk.DISABLED)
         self.log("\n" + "=" * 50)
         self.log(">> START: Anonimizacja w toku...")
+        if self.anon_key_dir_var.get() and self.anon_key_dir_var.get() != out_dir:
+            self.log(
+                f"[BEZPIECZEŃSTWO] Klucz mapowania zostanie zapisany w bezpiecznym katalogu: {key_dir}"
+            )
+        else:
+            self.log(
+                "[BEZPIECZEŃSTWO] OSTRZEŻENIE: Klucz mapowania jest zapisywany w folderze wyjściowym. Pamiętaj, aby NIE wysyłać go do AI!"
+            )
+
         threading.Thread(
             target=self.anon_thread,
-            args=(in_dir, out_dir, pii_enabled, enabled_fastmask),
+            args=(in_dir, out_dir, key_dir, pii_enabled, enabled_fastmask),
             daemon=True,
         ).start()
 
-    def anon_thread(self, in_dir, out_dir, pii_enabled, enabled_fastmask):
+    def anon_thread(self, in_dir, out_dir, key_dir, pii_enabled, enabled_fastmask):
         try:
             files = [
                 f
@@ -382,7 +421,7 @@ class App(tk.Tk):
                 if handled:
                     self.gui_queue.put(("ACTION", "PROGRESS", num, total))
 
-            key_path = os.path.join(out_dir, "klucz_mapowania.xlsx")
+            key_path = os.path.join(key_dir, "klucz_mapowania.xlsx")
             self.export_mapping_internal(key_path)
         finally:
             self.log("Zakończono.")
@@ -464,7 +503,11 @@ class App(tk.Tk):
         self.log("[INFO] Logi skopiowane do schowka.")
 
     def export_mapping(self):
-        suggested_dir = self.anon_out_dir_var.get() or os.path.expanduser("~")
+        suggested_dir = (
+            self.anon_key_dir_var.get()
+            or self.anon_out_dir_var.get()
+            or os.path.expanduser("~")
+        )
         f = filedialog.asksaveasfilename(
             initialdir=suggested_dir,
             initialfile="klucz_mapowania.xlsx",
@@ -507,12 +550,16 @@ class App(tk.Tk):
             self.log(
                 f"[SUKCES] Wygenerowano/zaktualizowano '{os.path.basename(key_path)}'"
             )
+            self.log(
+                f"[BEZPIECZEŃSTWO] Zapisano klucz w: '{key_path}'. UWAGA: Zawiera oryginalne dane PII, nie przesyłaj go do AI!"
+            )
 
             html_path = os.path.splitext(key_path)[0] + "_Raport_Zmian.html"
             html_content = [
                 "<html><head><meta charset='utf-8'><title>Raport Zmian</title>",
-                "<style>body{font-family: Arial;} table{border-collapse: collapse; width: 100%%; th, td{border: 1px solid #ddd; padding: 8px;} th{background-color: #f2f2f2;}</style>",
+                "<style>body{font-family: Arial;} table{border-collapse: collapse; width: 100%; th, td{border: 1px solid #ddd; padding: 8px;} th{background-color: #f2f2f2;}</style>",
                 "</head><body><h2>Raport Zmian Anonimizacji</h2>",
+                "<p style='color:red;'><strong>OSTRZEŻENIE: Ten raport zawiera oryginalne dane wrażliwe. Chroń go przed nieuprawnionym dostępem i nie udostępniaj zewnętrznym modelom AI.</strong></p>",
                 "<table><tr><th>Oryginał</th><th>Kategoria</th><th>Pseudonim</th><th>Kontekst Zdania (Przed Zmianą)</th></tr>",
             ]
             for r in all_records:
