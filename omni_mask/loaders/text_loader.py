@@ -18,21 +18,9 @@ class TextLoader(BaseLoader):
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             text = f.read()
 
-        # PII first
-        if pii_enabled:
-            text, pii_mappings = core.pii_anonymize_text(text, pii_enabled)
-            core.accumulate_pii_mappings(pii_mappings)
-
-        # Then FastMasker
-        if enabled_fastmask:
-            rules = core._build_fastmask_rules(enabled_fastmask)
-            if rules:
-                fm_masker = __import__(
-                    "llm_router_plugins.maskers.fast_masker.core.masker",
-                    fromlist=["FastMasker"],
-                ).FastMasker(rules)
-                core._fastmask_instances.append(fm_masker)
-                text, fm_mappings = fm_masker.mask(text)
+        text = core.anonymize_text(
+            text, pii_enabled=pii_enabled, enabled_fastmask=enabled_fastmask
+        )
 
         with open(outpath, "w", encoding="utf-8") as f:
             f.write(text)

@@ -1,4 +1,6 @@
 import logging
+from collections import defaultdict
+from typing import Dict, List, Optional, Set, Tuple
 import pandas as pd
 
 from llm_router_plugins.maskers.fast_masker.core.masker import (
@@ -10,10 +12,16 @@ from llm_router_plugins.maskers.fast_masker.rules import (
     PhoneRule,
     PhoneInternationalRule,
     BankAccountRule,
+    NrbRule,
     PassportRule,
     IdCardRule,
     PeselRule,
     NipRule,
+    EuVatRule,
+    KrsRule,
+    RegonRule,
+    PostalCodeRule,
+    UrlRule,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,25 +54,60 @@ PII_TYPE_LABELS = {
 # Labels for the FastMasker checkbox section
 ANON_TYPE_LABELS = {
     "PESEL": "PESEL",
-    "NIP": "NIP (ID podatkowy)",
+    "NIP": "NIP (ID podatkowy / VAT-UE)",
+    "REGON": "REGON",
+    "KRS": "KRS",
     "TELEFON": "Numer telefonu",
     "EMAIL": "Adres e-mail",
-    "KONTO_BANKOWE": "Konto bankowe (IBAN)",
-    "DOKUMENT_TOZSAMOSCI": "Dokument tożsamości",
-    "NAZWISKO": "Nazwisko (imię + nazwisko)",
-    "ADRES": "Adres",
+    "URL": "Adres URL / Link",
+    "KONTO_BANKOWE": "Konto bankowe (IBAN / NRB)",
+    "DOKUMENT_TOZSAMOSCI": "Dokument tożsamości (Dowód / Paszport)",
+    "ADRES": "Adres (kod pocztowy)",
+}
+
+# Mapping of technical / English entity names to canonical Polish labels
+ENTITY_TYPE_MAP = {
+    # PII model categories
+    "PERSON": "OSOBA",
+    "ORGANIZATION": "ORGANIZACJA",
+    "LOCATION": "LOKALIZACJA",
+    "FACILITY": "OBIEKT",
+    "PRODUCT": "PRODUKT",
+    "EVENT": "WYDARZENIE",
+    "CONTACT/NUM": "TELEFON",
+    # FastMasker rule tag types
+    "PHONE": "TELEFON",
+    "PHONE_INTERNATIONAL": "TELEFON",
+    "TELEFON": "TELEFON",
+    "EMAIL": "EMAIL",
+    "PESEL": "PESEL",
+    "NIP": "NIP",
+    "EU_VAT": "NIP",
+    "REGON": "REGON",
+    "KRS": "KRS",
+    "BANK_ACCOUNT": "KONTO_BANKOWE",
+    "NRB": "KONTO_BANKOWE",
+    "KONTO_BANKOWE": "KONTO_BANKOWE",
+    "PASSPORT": "DOKUMENT_TOZSAMOSCI",
+    "ID_CARD": "DOKUMENT_TOZSAMOSCI",
+    "DOKUMENT_TOZSAMOSCI": "DOKUMENT_TOZSAMOSCI",
+    "POSTAL_CODE": "ADRES",
+    "ADRES": "ADRES",
+    "URL": "URL",
 }
 
 # Map FastMasker type names to rule classes
 _FASTMASKER_RULES = {
-    "PESEL": PeselRule,
-    "NIP": NipRule,
-    "TELEFON": PhoneRule,
-    "EMAIL": EmailRule,
-    "KONTO_BANKOWE": BankAccountRule,
-    "DOKUMENT_TOZSAMOSCI": PassportRule,
-    "NAZWISKO": None,
-    "ADRES": None,
+    "PESEL": [PeselRule],
+    "NIP": [NipRule, EuVatRule],
+    "REGON": [RegonRule],
+    "KRS": [KrsRule],
+    "TELEFON": [PhoneInternationalRule, PhoneRule],
+    "EMAIL": [EmailRule],
+    "URL": [UrlRule],
+    "KONTO_BANKOWE": [BankAccountRule, NrbRule],
+    "DOKUMENT_TOZSAMOSCI": [PassportRule, IdCardRule],
+    "ADRES": [PostalCodeRule],
 }
 
 _pii_predictor = None
@@ -81,147 +124,188 @@ def _get_pii_predictor():
     return _pii_predictor
 
 
-class AnonymizerCore:
-    """Wrapper around FastMasker that exposes the original omni-mask API with PII support."""
+class EntityRegistry:
+    """Central registry for managing consistent entity tags across a session/document."""
 
     def __init__(self):
-        self._masker = FastMasker()
-        self.mapping = self._masker.mapping
+        self.val_to_tag: Dict[str, str] = {}
+        self.tag_to_val: Dict[str, str] = {}
+        self.type_counters: Dict[str, int] = defaultdict(int)
+        self.records: List[Dict[str, str]] = []
+
+    def get_or_create(self, value: str, entity_type: str) -> str:
+        """Get existing tag for value or create a new sequential tag."""
+        norm_val = value.strip()
+        if not norm_val:
+            return value
+
+        # Normalize canonical type name
+        canon_type = ENTITY_TYPE_MAP.get(entity_type.upper(), entity_type.upper())
+
+        if norm_val in self.val_to_tag:
+            return self.val_to_tag[norm_val]
+
+        self.type_counters[canon_type] += 1
+        idx = self.type_counters[canon_type]
+        tag = f"[{canon_type}_{idx}]"
+
+        self.val_to_tag[norm_val] = tag
+        self.tag_to_val[tag] = norm_val
+        self.records.append(
+            {
+                "Oryginalna wartość": norm_val,
+                "Typ danych": canon_type,
+                "Wygenerowany pseudonim": tag,
+                "Kontekst": "",
+            }
+        )
+        return tag
+
+    def reset(self):
+        self.val_to_tag.clear()
+        self.tag_to_val.clear()
+        self.type_counters.clear()
+        self.records.clear()
+
+    def get_mapping_dataframe(self) -> pd.DataFrame:
+        if not self.records:
+            return pd.DataFrame(
+                columns=[
+                    "Oryginalna wartość",
+                    "Typ danych",
+                    "Wygenerowany pseudonim",
+                    "Kontekst",
+                ]
+            )
+        return pd.DataFrame(self.records)
+
+    def save_mapping(self, path: str):
+        df = self.get_mapping_dataframe()
+        df.to_excel(path, index=False)
+
+
+class AnonymizerCore:
+    """Coordinates deterministic rules and ML model with a unified EntityRegistry."""
+
+    def __init__(self):
+        self.registry = EntityRegistry()
         self.enabled = {k: True for k in ANON_TYPE_LABELS}
         self.pii_enabled = set(PII_TYPE_LABELS.keys())
-        self._accumulated_records = []
         self._fastmask_instances = []
 
-    def _build_fastmask_rules(self, enabled_fastmask: set) -> list:
+    @property
+    def mapping(self) -> Dict[str, str]:
+        return self.registry.val_to_tag
+
+    def _build_fastmask_rules(self, enabled_fastmask: Set[str]) -> list:
         rules = []
         for fm_type in enabled_fastmask:
-            rule_cls = _FASTMASKER_RULES.get(fm_type)
-            if rule_cls:
-                rules.append(rule_cls())
+            rule_entry = _FASTMASKER_RULES.get(fm_type)
+            if not rule_entry:
+                continue
+            if isinstance(rule_entry, (list, tuple)):
+                for rule_cls in rule_entry:
+                    if rule_cls:
+                        rules.append(rule_cls())
+            else:
+                rules.append(rule_entry())
         return rules
 
-    def pii_anonymize_text(self, text: str, pii_enabled_labels: set) -> tuple:
-        """Return (masked_text, pii_mappings) without accumulating."""
-        predictor = _get_pii_predictor()
+    def _apply_pii_with_registry(
+        self, text: str, pii_enabled_labels: Set[str]
+    ) -> str:
         if not pii_enabled_labels:
-            return text, {}
+            return text
 
+        predictor = _get_pii_predictor()
         target_labels = [
             l for l in PII_TYPE_LABELS.keys() if l in pii_enabled_labels
         ]
         try:
-            result = predictor.predict_and_anonymize(text=text, labels=target_labels)
+            predictions = predictor.predict(text=text)
         except Exception as exc:
             logger.warning("PII prediction failed: %s", exc)
-            return text, {}
-        mappings = result.get("mappings", {})
-        if mappings and len(mappings) < 5 and len(text) > 200:
-            logger.warning(
-                "PII returned only %d mappings for text of length %d — "
-                "possible PyTorch 2.12 issue",
-                len(mappings),
-                len(text),
-            )
-        return result["text"], mappings
+            return text
 
-    def accumulate_pii_mappings(self, mappings: dict):
-        for tag, orig in mappings.items():
-            tag_type = tag.split("_")[0]
-            self._accumulated_records.append(
-                {
-                    "Oryginalna wartość": orig,
-                    "Typ danych": tag_type,
-                    "Wygenerowany pseudonim": "{" + tag + "}",
-                    "Kontekst": "",
-                }
+        result_parts = []
+        for item in predictions:
+            word = item.get("word", "")
+            label = item.get("label", "O")
+            trimmed = word.strip()
+
+            # Skip if label is not enabled, or if it's "O", or if it's already a tag
+            is_tag = (trimmed.startswith("[") and trimmed.endswith("]")) or (
+                trimmed.startswith("{") and trimmed.endswith("}")
             )
 
-    def accumulate_fastmask_mappings(self, mappings: dict):
-        for pseudo, orig in mappings.items():
-            tag_type = pseudo.split("_")[0]
-            self._accumulated_records.append(
-                {
-                    "Oryginalna wartość": orig,
-                    "Typ danych": tag_type,
-                    "Wygenerowany pseudonim": "{" + pseudo + "}",
-                    "Kontekst": "",
-                }
-            )
+            if label in target_labels and label != "O" and trimmed and not is_tag:
+                l_ws = word[: len(word) - len(word.lstrip())]
+                r_ws = word[len(word.rstrip()) :]
+                tag = self.registry.get_or_create(trimmed, label)
+                result_parts.append(l_ws + tag + r_ws)
+            else:
+                result_parts.append(word)
 
-    def reset_records(self):
-        self._accumulated_records = []
+        return "".join(result_parts)
 
-    @property
-    def pii_records(self):
-        return self._accumulated_records
+    def anonymize_text(
+        self,
+        text: str,
+        pii_enabled: Optional[Set[str]] = None,
+        enabled_fastmask: Optional[Set[str]] = None,
+    ) -> str:
+        """Anonymizes text with deterministic rules first, then PII model using EntityRegistry."""
+        if not text:
+            return text
 
-    @property
-    def records(self):
-        all_records = list(self._accumulated_records)
-        # PII mapping from core._masker (backwards compat)
-        for orig, pseud in self.mapping.items():
-            all_records.append(
-                {
-                    "Oryginalna wartość": orig,
-                    "Typ danych": pseud.split("_")[0],
-                    "Wygenerowany pseudonim": "{" + pseud + "}",
-                    "Kontekst": "",
-                }
-            )
-        # FastMasker instances created by loaders
-        for fm in self._fastmask_instances:
-            for orig, pseud in fm.mapping.items():
-                all_records.append(
-                    {
-                        "Oryginalna wartość": orig,
-                        "Typ danych": pseud.split("_")[0],
-                        "Wygenerowany pseudonim": "{" + pseud + "}",
-                        "Kontekst": "",
-                    }
+        # 1. Apply FastMasker deterministic rules first
+        if enabled_fastmask:
+            rules = self._build_fastmask_rules(enabled_fastmask)
+            for rule in rules:
+                text, _ = rule.apply(
+                    text,
+                    anonymizer_fn=lambda val, tag_type: self.registry.get_or_create(
+                        val, tag_type
+                    ),
                 )
 
-        # Deduplicate by original value — same value can appear in multiple
-        # FastMasker instances with different pseudonyms; keep the first one
-        seen = set()
-        deduped = []
-        for r in all_records:
-            if r["Oryginalna wartość"] not in seen:
-                seen.add(r["Oryginalna wartość"])
-                deduped.append(r)
-        return deduped
+        # 2. Apply PII classification model on the remaining text
+        if pii_enabled:
+            text = self._apply_pii_with_registry(text, pii_enabled)
+
+        return text
+
+    def pii_anonymize_text(self, text: str, pii_enabled_labels: Set[str]) -> Tuple[str, dict]:
+        """Backwards compatibility helper."""
+        masked_text = self._apply_pii_with_registry(text, pii_enabled_labels)
+        return masked_text, {}
+
+    def accumulate_pii_mappings(self, mappings: dict):
+        pass
+
+    def accumulate_fastmask_mappings(self, mappings: dict):
+        pass
+
+    def reset_records(self):
+        self.registry.reset()
+        self._fastmask_instances = []
+
+    @property
+    def pii_records(self) -> List[Dict[str, str]]:
+        return self.registry.records
+
+    @property
+    def records(self) -> List[Dict[str, str]]:
+        return self.registry.records
 
     def get_pseudo(self, text: str, type_name: str) -> str:
-        pseudo = self._masker._get_pseudo(text, type_name)
-        return "{" + pseudo + "}"
+        return self.registry.get_or_create(text, type_name)
 
     def save_mapping(self, path: str):
-        df = (
-            pd.DataFrame(self.records)
-            if self.records
-            else pd.DataFrame(
-                columns=[
-                    "Oryginalna wartość",
-                    "Typ danych",
-                    "Wygenerowany pseudonim",
-                    "Kontekst",
-                ]
-            )
-        )
-        df.to_excel(path, index=False)
+        self.registry.save_mapping(path)
 
     def get_mapping_df(self) -> pd.DataFrame:
-        return (
-            pd.DataFrame(self.records)
-            if self.records
-            else pd.DataFrame(
-                columns=[
-                    "Oryginalna wartość",
-                    "Typ danych",
-                    "Wygenerowany pseudonim",
-                    "Kontekst",
-                ]
-            )
-        )
+        return self.registry.get_mapping_dataframe()
 
 
 class DeanonymizerCore:
