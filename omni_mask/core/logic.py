@@ -10,10 +10,16 @@ from llm_router_plugins.maskers.fast_masker.rules import (
     PhoneRule,
     PhoneInternationalRule,
     BankAccountRule,
+    NrbRule,
     PassportRule,
     IdCardRule,
     PeselRule,
     NipRule,
+    EuVatRule,
+    KrsRule,
+    RegonRule,
+    PostalCodeRule,
+    UrlRule,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,25 +52,29 @@ PII_TYPE_LABELS = {
 # Labels for the FastMasker checkbox section
 ANON_TYPE_LABELS = {
     "PESEL": "PESEL",
-    "NIP": "NIP (ID podatkowy)",
+    "NIP": "NIP (ID podatkowy / VAT-UE)",
+    "REGON": "REGON",
+    "KRS": "KRS",
     "TELEFON": "Numer telefonu",
     "EMAIL": "Adres e-mail",
-    "KONTO_BANKOWE": "Konto bankowe (IBAN)",
-    "DOKUMENT_TOZSAMOSCI": "Dokument tożsamości",
-    "NAZWISKO": "Nazwisko (imię + nazwisko)",
-    "ADRES": "Adres",
+    "URL": "Adres URL / Link",
+    "KONTO_BANKOWE": "Konto bankowe (IBAN / NRB)",
+    "DOKUMENT_TOZSAMOSCI": "Dokument tożsamości (Dowód / Paszport)",
+    "ADRES": "Adres (kod pocztowy)",
 }
 
 # Map FastMasker type names to rule classes
 _FASTMASKER_RULES = {
-    "PESEL": PeselRule,
-    "NIP": NipRule,
-    "TELEFON": PhoneRule,
-    "EMAIL": EmailRule,
-    "KONTO_BANKOWE": BankAccountRule,
-    "DOKUMENT_TOZSAMOSCI": PassportRule,
-    "NAZWISKO": None,
-    "ADRES": None,
+    "PESEL": [PeselRule],
+    "NIP": [NipRule, EuVatRule],
+    "REGON": [RegonRule],
+    "KRS": [KrsRule],
+    "TELEFON": [PhoneInternationalRule, PhoneRule],
+    "EMAIL": [EmailRule],
+    "URL": [UrlRule],
+    "KONTO_BANKOWE": [BankAccountRule, NrbRule],
+    "DOKUMENT_TOZSAMOSCI": [PassportRule, IdCardRule],
+    "ADRES": [PostalCodeRule],
 }
 
 _pii_predictor = None
@@ -95,9 +105,15 @@ class AnonymizerCore:
     def _build_fastmask_rules(self, enabled_fastmask: set) -> list:
         rules = []
         for fm_type in enabled_fastmask:
-            rule_cls = _FASTMASKER_RULES.get(fm_type)
-            if rule_cls:
-                rules.append(rule_cls())
+            rule_entry = _FASTMASKER_RULES.get(fm_type)
+            if not rule_entry:
+                continue
+            if isinstance(rule_entry, (list, tuple)):
+                for rule_cls in rule_entry:
+                    if rule_cls:
+                        rules.append(rule_cls())
+            else:
+                rules.append(rule_entry())
         return rules
 
     def pii_anonymize_text(self, text: str, pii_enabled_labels: set) -> tuple:
