@@ -275,7 +275,9 @@ class AnonymizerCore:
 
         return text
 
-    def pii_anonymize_text(self, text: str, pii_enabled_labels: Set[str]) -> Tuple[str, dict]:
+    def pii_anonymize_text(
+        self, text: str, pii_enabled_labels: Set[str]
+    ) -> Tuple[str, dict]:
         """Backwards compatibility helper."""
         masked_text = self._apply_pii_with_registry(text, pii_enabled_labels)
         return masked_text, {}

@@ -367,9 +367,13 @@ class App(tk.Tk):
         self.log("\n" + "=" * 50)
         self.log(">> START: Anonimizacja w toku...")
         if self.anon_key_dir_var.get() and self.anon_key_dir_var.get() != out_dir:
-            self.log(f"[BEZPIECZEŃSTWO] Klucz mapowania zostanie zapisany w bezpiecznym katalogu: {key_dir}")
+            self.log(
+                f"[BEZPIECZEŃSTWO] Klucz mapowania zostanie zapisany w bezpiecznym katalogu: {key_dir}"
+            )
         else:
-            self.log("[BEZPIECZEŃSTWO] OSTRZEŻENIE: Klucz mapowania jest zapisywany w folderze wyjściowym. Pamiętaj, aby NIE wysyłać go do AI!")
+            self.log(
+                "[BEZPIECZEŃSTWO] OSTRZEŻENIE: Klucz mapowania jest zapisywany w folderze wyjściowym. Pamiętaj, aby NIE wysyłać go do AI!"
+            )
 
         threading.Thread(
             target=self.anon_thread,

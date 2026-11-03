@@ -60,7 +60,11 @@ def _process_cell_comment(cell: Any, process_fn: Callable[[str], str]) -> None:
         if new_text != comment.text:
             comment.text = new_text
 
-    if hasattr(comment, "author") and isinstance(comment.author, str) and comment.author:
+    if (
+        hasattr(comment, "author")
+        and isinstance(comment.author, str)
+        and comment.author
+    ):
         new_author = process_fn(comment.author)
         if new_author != comment.author:
             comment.author = new_author
