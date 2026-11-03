@@ -21,8 +21,10 @@ class ExcelLoader(BaseLoader):
             for row in sheet.iter_rows():
                 for cell in row:
                     if cell.value and isinstance(cell.value, str):
-                        cell.value = _process_segment(
-                            cell.value, core, pii_enabled, enabled_fastmask
+                        cell.value = core.anonymize_text(
+                            cell.value,
+                            pii_enabled=pii_enabled,
+                            enabled_fastmask=enabled_fastmask,
                         )
         wb.save(outpath)
         wb.close()
@@ -36,21 +38,3 @@ class ExcelLoader(BaseLoader):
                         cell.value = core.deanonymize_text(cell.value)
         wb.save(outpath)
         wb.close()
-
-
-def _process_segment(
-    text: str, core: Any, pii_enabled: Set, enabled_fastmask: Set
-) -> str:
-    if pii_enabled:
-        text, pii_mappings = core.pii_anonymize_text(text, pii_enabled)
-        core.accumulate_pii_mappings(pii_mappings)
-    if enabled_fastmask:
-        rules = core._build_fastmask_rules(enabled_fastmask)
-        if rules:
-            fm_masker = __import__(
-                "llm_router_plugins.maskers.fast_masker.core.masker",
-                fromlist=["FastMasker"],
-            ).FastMasker(rules)
-            core._fastmask_instances.append(fm_masker)
-            text, fm_mappings = fm_masker.mask(text)
-    return text
